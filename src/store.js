@@ -73,6 +73,27 @@ function defaultProgram(routines) {
   };
 }
 
+// Björn's Pull day, set 2026-11-10. Weights start blank; the app remembers them after the first session.
+const PULL_PROGRAM = () => [
+  { ...ex('Incline walk', 1, '', '', 0), type: 'time', minutes: 5, note: 'Treadmill · incline 12 · 4.8 km/h' },
+  ex('Pull-ups', 3, '', '', 120),
+  { ...ex('Single-arm lat pulldown', 2, 'max', '', 90), note: 'Each arm, to failure' },
+  ex('Cable row', 3, 8, '', 90),
+  ex('Face pulls', 3, '10-12', '', 60),
+  { ...ex('21s biceps curl', 2, 21, '', 90), note: '7 bottom half + 7 top half + 7 full range' },
+  ex('Hammer curl', 3, '10-12', '', 60),
+  ex('Wide-grip biceps curl', 2, '8-12', '', 60),
+];
+
+/** One-time data updates, each applied once per saved state (tracked in `applied`). */
+const DATA_UPDATES = {
+  'pull-program-2026-11-10': (st) => {
+    const r = st.gym.routines.find((x) => x.name.trim().toLowerCase() === 'pull');
+    if (r) r.exercises = PULL_PROGRAM();
+    else st.gym.routines.push({ id: uid(), name: 'Pull', exercises: PULL_PROGRAM() });
+  },
+};
+
 const starterHabits = () => [
   { id: uid(), name: 'Learn Italian', note: '15 minutes' },
   { id: uid(), name: 'Play the guitar', note: '' },
@@ -137,6 +158,12 @@ function migrate(s) {
     daily: s.daily ? { ...d.daily, ...s.daily } : { habits: starterHabits(), done: {} },
   };
   out.gym.routines = [...out.gym.routines];
+  out.applied = [...(s.applied || [])];
+  for (const [id, fn] of Object.entries(DATA_UPDATES)) {
+    if (out.applied.includes(id)) continue;
+    fn(out);
+    out.applied.push(id);
+  }
   if (!out.gym.program) out.gym.program = defaultProgram(out.gym.routines);
   return out;
 }

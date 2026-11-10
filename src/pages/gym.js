@@ -3,24 +3,55 @@ import { get, update, uid } from '../store.js';
 import { fmtDuration, fmtDay, dayKey, weekStart, todayKey, addDays, parseKey } from '../dates.js';
 import { slotFor, workoutOn, toggleSkip } from '../schedule.js';
 
-const targetTpl = (e) => `${e.sets} × ${e.reps || '?'}${+e.weight ? ` @ ${fmtNum(e.weight)} kg` : ''}`;
-const targetLive = (e) => `${e.sets.length} × ${e.reps || '?'}${+e.weight ? ` @ ${fmtNum(e.weight)} kg` : ''}`;
+/*
+ * Exercise shape (routine template):
+ *   { id, name, type: 'sets' | 'time', note, sets, reps, weight, rest, minutes }
+ * reps can be a number (8) or text ("10-12", "max"). Timed exercises use `minutes` instead of sets/reps.
+ */
+const isTimed = (e) => e.type === 'time';
+const repsTxt = (r) => (r === '' || r == null ? '' : String(r).replace(/\s*-\s*/, '–'));
+const parseReps = (v) => {
+  const t = String(v ?? '').trim();
+  return /^\d+$/.test(t) ? +t : t;
+};
+const numericReps = (r) => (typeof r === 'number' ? r : /^\d+$/.test(String(r ?? '')) ? +r : '');
+const fmtTarget = (n, e) =>
+  isTimed(e) ? `${e.minutes || '?'} min` : `${n}${repsTxt(e.reps) ? ` × ${repsTxt(e.reps)}` : ' sets'}${+e.weight ? ` @ ${fmtNum(e.weight)} kg` : ''}`;
+const targetTpl = (e) => fmtTarget(e.sets, e);
+const targetLive = (e) => fmtTarget(e.sets.length, e);
+const fmtSets = (e) => (isTimed(e) ? `${e.minutes || ''} min ✓` : e.sets.map((x) => `${+x.weight ? fmtNum(x.weight) + '×' : ''}${x.reps || 0}`).join(', '));
 const allDone = (e) => e.sets.length > 0 && e.sets.every((x) => x.done);
 const volume = (w) => w.exercises.reduce((v, e) => v + e.sets.reduce((a, x) => a + (+x.weight || 0) * (+x.reps || 0), 0), 0);
-const setCount = (w) => w.exercises.reduce((n, e) => n + e.sets.length, 0);
+const setCount = (w) => w.exercises.reduce((n, e) => n + (isTimed(e) ? 0 : e.sets.length), 0);
 
-function lastTime(s, name) {
+function lastExercise(s, name) {
   const n = name.trim().toLowerCase();
   for (const w of s.gym.history) {
     const e = w.exercises.find((x) => x.name.trim().toLowerCase() === n);
-    if (e) return { when: w.endedAt, text: e.sets.map((x) => `${fmtNum(x.weight)}×${x.reps || 0}`).join(', ') };
+    if (e) return { when: w.endedAt, ex: e };
   }
   return null;
 }
 
 /* ---------- starting / finishing ---------- */
 
+/** Turn a routine exercise into a live one; sets are pre-filled with what you did last time. */
+function buildLive(s, e) {
+  const base = { templateId: e.id || null, type: e.type || 'sets', name: e.name, note: e.note || '', minutes: e.minutes || '', reps: e.reps, weight: e.weight, rest: e.rest };
+  if (isTimed(e)) return { ...base, sets: [{ done: false }] };
+  const prev = lastExercise(s, e.name)?.ex.sets || [];
+  return {
+    ...base,
+    sets: Array.from({ length: Math.max(1, +e.sets || 1) }, (_, k) => {
+      const p = prev[k] || prev[prev.length - 1];
+      return { weight: p?.weight ?? e.weight ?? '', reps: p?.reps ?? numericReps(e.reps), done: false };
+    }),
+  };
+}
+
 export function start(routine) {
+  const s0 = get();
+  const exercises = (routine?.exercises || []).map((e) => buildLive(s0, e));
   update((s) => {
     s.gym.active = {
       id: uid(),
@@ -29,14 +60,8 @@ export function start(routine) {
       startedAt: Date.now(),
       current: 0,
       restEndsAt: null,
-      exercises: (routine?.exercises || []).map((e) => ({
-        templateId: e.id,
-        name: e.name,
-        reps: e.reps,
-        weight: e.weight,
-        rest: e.rest,
-        sets: Array.from({ length: Math.max(1, +e.sets || 1) }, () => ({ weight: e.weight ?? '', reps: e.reps ?? '', done: false })),
-      })),
+      timerLabel: null,
+      exercises,
     };
   });
   window.scrollTo(0, 0);
@@ -45,7 +70,7 @@ export function start(routine) {
 function finish() {
   const a = get().gym.active;
   const done = a.exercises.map((e) => ({ ...e, sets: e.sets.filter((x) => x.done) })).filter((e) => e.sets.length);
-  if (!done.length && !confirm('No sets checked off. Discard this workout?')) return;
+  if (!done.length && !confirm('Nothing checked off. Discard this workout?')) return;
   update((s) => {
     if (done.length) {
       s.gym.history.unshift({ id: uid(), name: a.name, routineId: a.routineId, startedAt: a.startedAt, endedAt: Date.now(), exercises: done });
@@ -53,6 +78,7 @@ function finish() {
       const r = s.gym.routines.find((r) => r.id === a.routineId);
       if (r)
         for (const e of done) {
+          if (isTimed(e)) continue;
           const t = r.exercises.find((x) => x.id === e.templateId);
           const top = Math.max(...e.sets.map((x) => +x.weight || 0));
           if (t && top > 0) t.weight = top;
@@ -69,37 +95,62 @@ function discard() {
 
 /* ---------- live workout ---------- */
 
-function setRow(i, k, set) {
+function completeSet(i, k) {
+  update((s) => {
+    const a = s.gym.active;
+    const ex = a.exercises[i];
+    const st = ex.sets[k];
+    st.done = !st.done;
+    if (!st.done) return;
+    if (!isTimed(ex)) {
+      const rest = +ex.rest || 90;
+      a.restEndsAt = Date.now() + rest * 1000;
+      a.restTotal = rest;
+      a.timerLabel = null;
+    } else if (a.timerLabel === ex.name) {
+      a.restEndsAt = null; // finished the cardio early
+    }
+    // Finished every set? Move on to what's next.
+    if (allDone(ex) && i === a.current && i < a.exercises.length - 1) a.current = i + 1;
+  });
+}
+
+function setRow(i, k, set, ex) {
   const edit = (field) => (ev) =>
     update((s) => (s.gym.active.exercises[i].sets[k][field] = ev.target.value === '' ? '' : +ev.target.value), { silent: true });
   return h(
     'div',
     { class: 'set-row' + (set.done ? ' done' : '') },
     h('span', { class: 'set-n' }, k + 1),
-    h('label', { class: 'set-field' }, numInput('w', set.weight, { step: '0.5', oninput: edit('weight'), 'aria-label': `Set ${k + 1} weight` }), h('span', {}, 'kg')),
-    h('label', { class: 'set-field' }, numInput('r', set.reps, { step: '1', inputmode: 'numeric', oninput: edit('reps'), 'aria-label': `Set ${k + 1} reps` }), h('span', {}, 'reps')),
+    h('label', { class: 'set-field' }, numInput('w', set.weight, { step: '0.5', placeholder: '–', oninput: edit('weight'), 'aria-label': `Set ${k + 1} weight` }), h('span', {}, 'kg')),
+    h('label', { class: 'set-field' }, numInput('r', set.reps, { step: '1', inputmode: 'numeric', placeholder: repsTxt(ex.reps) || '–', oninput: edit('reps'), 'aria-label': `Set ${k + 1} reps` }), h('span', {}, 'reps')),
+    h('button', { class: 'check' + (set.done ? ' on' : ''), 'aria-label': set.done ? 'Undo set' : 'Complete set', onclick: () => completeSet(i, k) }, icon('check', 20))
+  );
+}
+
+function timedRow(i, ex) {
+  const done = ex.sets[0]?.done;
+  const mins = +ex.minutes || 5;
+  return h(
+    'div',
+    { class: 'timed-row' + (done ? ' done' : '') },
     h(
       'button',
       {
-        class: 'check' + (set.done ? ' on' : ''),
-        'aria-label': set.done ? 'Undo set' : 'Complete set',
+        class: 'btn primary',
+        disabled: done,
         onclick: () =>
           update((s) => {
             const a = s.gym.active;
-            const ex = a.exercises[i];
-            const st = ex.sets[k];
-            st.done = !st.done;
-            if (st.done) {
-              const rest = +ex.rest || 90;
-              a.restEndsAt = Date.now() + rest * 1000;
-              a.restTotal = rest;
-              // Finished every set? Move on to what's next.
-              if (allDone(ex) && i === a.current && i < a.exercises.length - 1) a.current = i + 1;
-            }
+            a.restEndsAt = Date.now() + mins * 60000;
+            a.restTotal = mins * 60;
+            a.timerLabel = ex.name;
           }),
       },
-      icon('check', 20)
-    )
+      icon('play', 18),
+      `Start ${mins}:00 timer`
+    ),
+    h('button', { class: 'check' + (done ? ' on' : ''), 'aria-label': done ? 'Undo' : 'Mark done', onclick: () => completeSet(i, 0) }, icon('check', 20))
   );
 }
 
@@ -129,35 +180,40 @@ function renderActive(root, s) {
     );
 
   if (ex) {
-    const last = lastTime(s, ex.name);
+    const last = lastExercise(s, ex.name);
     root.append(
       h(
         'section',
         { class: 'card current' },
         h('div', { class: 'eyebrow' }, `Exercise ${i + 1} of ${a.exercises.length}`),
         h('h2', { class: 'ex-name' }, ex.name),
-        h('div', { class: 'muted' }, `Target ${targetLive(ex)} · rest ${ex.rest || 90}s`),
-        last && h('div', { class: 'last-time' }, h('span', {}, `Last time (${fmtDay(dayKey(new Date(last.when)))})`), h('strong', {}, last.text)),
-        h('div', { class: 'sets' }, ex.sets.map((set, k) => setRow(i, k, set))),
-        h(
-          'div',
-          { class: 'row-btns' },
-          h(
-            'button',
-            {
-              class: 'btn small',
-              onclick: () =>
-                update((st) => {
-                  const sets = st.gym.active.exercises[i].sets;
-                  const prev = sets[sets.length - 1] || { weight: ex.weight, reps: ex.reps };
-                  sets.push({ weight: prev.weight, reps: prev.reps, done: false });
-                }),
-            },
-            icon('plus', 16),
-            'Set'
-          ),
-          ex.sets.length > 1 && h('button', { class: 'btn small ghost', onclick: () => update((st) => st.gym.active.exercises[i].sets.pop()) }, 'Remove set')
-        )
+        h('div', { class: 'muted' }, isTimed(ex) ? `${ex.minutes || 5} minutes` : `Target ${targetLive(ex)} · rest ${ex.rest || 90}s`),
+        ex.note && h('div', { class: 'ex-note' }, ex.note),
+        last && !isTimed(ex) && h('div', { class: 'last-time' }, h('span', {}, `Last time (${fmtDay(dayKey(new Date(last.when)))})`), h('strong', {}, fmtSets(last.ex))),
+        isTimed(ex)
+          ? timedRow(i, ex)
+          : [
+              h('div', { class: 'sets' }, ex.sets.map((set, k) => setRow(i, k, set, ex))),
+              h(
+                'div',
+                { class: 'row-btns' },
+                h(
+                  'button',
+                  {
+                    class: 'btn small',
+                    onclick: () =>
+                      update((st) => {
+                        const sets = st.gym.active.exercises[i].sets;
+                        const prev = sets[sets.length - 1] || { weight: ex.weight, reps: numericReps(ex.reps) };
+                        sets.push({ weight: prev.weight, reps: prev.reps, done: false });
+                      }),
+                  },
+                  icon('plus', 16),
+                  'Set'
+                ),
+                ex.sets.length > 1 && h('button', { class: 'btn small ghost', onclick: () => update((st) => st.gym.active.exercises[i].sets.pop()) }, 'Remove set')
+              ),
+            ]
       ),
       h(
         'section',
@@ -186,16 +242,24 @@ function addExerciseSheet() {
       'div',
       { class: 'form' },
       field('Exercise', h('input', { name: 'name', required: true, placeholder: 'e.g. Dips', autocomplete: 'off' })),
-      h('div', { class: 'grid-4' }, field('Sets', numInput('sets', 3)), field('Reps', numInput('reps', 10)), field('kg', numInput('weight', '')), field('Rest s', numInput('rest', 90)))
+      h(
+        'div',
+        { class: 'grid-4' },
+        field('Sets', numInput('sets', 3)),
+        field('Reps', h('input', { name: 'reps', value: '10', placeholder: '8, 10-12, max' })),
+        field('kg', numInput('weight', '')),
+        field('Rest s', numInput('rest', 90))
+      )
     ),
     submitLabel: 'Add',
     onSubmit(fd) {
       const name = fd.get('name').trim();
       if (!name) return false;
-      const e = { name, reps: +fd.get('reps') || '', weight: fd.get('weight') === '' ? '' : +fd.get('weight'), rest: +fd.get('rest') || 90 };
+      const e = { name, sets: +fd.get('sets') || 1, reps: parseReps(fd.get('reps')), weight: fd.get('weight') === '' ? '' : +fd.get('weight'), rest: +fd.get('rest') || 90 };
+      const live = buildLive(get(), e);
       update((s) => {
         const a = s.gym.active;
-        a.exercises.push({ templateId: null, ...e, sets: Array.from({ length: Math.max(1, +fd.get('sets') || 1) }, () => ({ weight: e.weight, reps: e.reps, done: false })) });
+        a.exercises.push(live);
         a.current = a.exercises.length - 1;
       });
     },
@@ -205,23 +269,31 @@ function addExerciseSheet() {
 /* ---------- routines ---------- */
 
 function exerciseRow(e = {}) {
+  const typeSel = h(
+    'select',
+    { class: 'x-type', value: e.type || 'sets', 'aria-label': 'Exercise type', onchange: () => row.classList.toggle('timed', typeSel.value === 'time') },
+    h('option', { value: 'sets' }, 'Sets & reps'),
+    h('option', { value: 'time' }, 'Timed (cardio)')
+  );
   const row = h(
     'div',
-    { class: 'ex-edit' },
+    { class: 'ex-edit' + (isTimed(e) ? ' timed' : '') },
     h(
       'div',
       { class: 'ex-edit-top' },
       h('input', { class: 'x-name', value: e.name || '', placeholder: 'Exercise name', 'aria-label': 'Exercise name' }),
       h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Remove exercise', onclick: () => row.remove() }, icon('close', 18))
     ),
+    h('div', { class: 'grid-2' }, typeSel, h('input', { class: 'x-note', value: e.note || '', placeholder: 'Note (optional)', 'aria-label': 'Note' })),
     h(
       'div',
-      { class: 'grid-4' },
+      { class: 'grid-4 only-sets' },
       field('Sets', numInput('', e.sets ?? 3, { class: 'x-sets' })),
-      field('Reps', numInput('', e.reps ?? 10, { class: 'x-reps' })),
+      field('Reps', h('input', { class: 'x-reps', value: String(e.reps ?? 10), placeholder: '10-12' })),
       field('kg', numInput('', e.weight ?? '', { class: 'x-weight' })),
       field('Rest s', numInput('', e.rest ?? 90, { class: 'x-rest' }))
-    )
+    ),
+    h('div', { class: 'grid-4 only-time' }, field('Minutes', numInput('', e.minutes ?? 5, { class: 'x-min' })))
   );
   row.dataset.id = e.id || '';
   return row;
@@ -236,20 +308,25 @@ function routineSheet(routine) {
       'div',
       { class: 'form' },
       field('Name', h('input', { name: 'name', value: routine?.name || '', required: true, placeholder: 'e.g. Upper body' })),
+      h('p', { class: 'muted small' }, 'Reps can be a number, a range like 10-12, or “max”.'),
       list,
       h('button', { type: 'button', class: 'btn block', onclick: () => list.append(exerciseRow()) }, icon('plus', 18), 'Add exercise')
     ),
     onSubmit(fd, form) {
       const name = fd.get('name').trim();
       if (!name) return false;
+      const q = (row, c) => row.querySelector(c).value;
       const exercises = [...form.querySelectorAll('.ex-edit')]
         .map((row) => ({
           id: row.dataset.id || uid(),
-          name: row.querySelector('.x-name').value.trim(),
-          sets: Math.max(1, +row.querySelector('.x-sets').value || 1),
-          reps: +row.querySelector('.x-reps').value || '',
-          weight: row.querySelector('.x-weight').value === '' ? '' : +row.querySelector('.x-weight').value,
-          rest: +row.querySelector('.x-rest').value || 90,
+          name: q(row, '.x-name').trim(),
+          type: q(row, '.x-type'),
+          note: q(row, '.x-note').trim(),
+          sets: Math.max(1, +q(row, '.x-sets') || 1),
+          reps: parseReps(q(row, '.x-reps')),
+          weight: q(row, '.x-weight') === '' ? '' : +q(row, '.x-weight'),
+          rest: +q(row, '.x-rest') || 90,
+          minutes: +q(row, '.x-min') || 5,
         }))
         .filter((e) => e.name);
       update((s) => {
@@ -274,7 +351,7 @@ function historySheet(w) {
       'div',
       { class: 'history-detail' },
       h('p', { class: 'muted' }, `${fmtDay(dayKey(new Date(w.startedAt)), { weekday: 'long', day: 'numeric', month: 'long' })} · ${fmtDuration(w.endedAt - w.startedAt)} · ${fmtNum(volume(w))} kg total`),
-      w.exercises.map((e) => h('div', { class: 'hd-ex' }, h('strong', {}, e.name), h('span', { class: 'muted' }, e.sets.map((x) => `${fmtNum(x.weight)}×${x.reps || 0}`).join(', '))))
+      w.exercises.map((e) => h('div', { class: 'hd-ex' }, h('strong', {}, e.name), h('span', { class: 'muted' }, fmtSets(e))))
     ),
     submitLabel: 'Close',
     danger: {

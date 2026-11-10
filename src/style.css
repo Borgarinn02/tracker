@@ -615,3 +615,11 @@ body.resting #toast { bottom: calc(var(--nav-h) + var(--safe-b) + 92px); }
 }
 .sync-ind[data-sync='syncing']::after, .sync-ind[data-sync='offline']::after { background: var(--carbs); }
 .sync-ind[data-sync='error']::after { background: var(--danger); }
+
+/* ---------- timed exercises, notes, editor types ---------- */
+.ex-note { font-size: 13px; font-weight: 600; background: var(--accent-soft); padding: 6px 10px; border-radius: 10px; justify-self: start; }
+.timed-row { display: grid; grid-template-columns: 1fr 52px; gap: 8px; margin: 10px 0 4px; }
+.timed-row .btn { min-height: 52px; }
+.ex-edit.timed .only-sets { display: none; }
+.ex-edit:not(.timed) .only-time { display: none; }
+.set-field input::placeholder { color: var(--muted); font-weight: 600; opacity: 0.7; }

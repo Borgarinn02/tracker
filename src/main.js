@@ -120,12 +120,13 @@ function tick() {
         // only alert if we were actually watching it run out
         navigator.vibrate?.([200, 100, 200]);
         beep();
-        toast('Rest over. Next set!');
+        toast(a.timerLabel ? `${a.timerLabel} done!` : 'Rest over. Next set!');
       }
       return;
     }
     restBar.hidden = false;
     document.body.classList.add('resting');
+    restBar.querySelector('.eyebrow').textContent = a.timerLabel || 'Rest';
     restBar.querySelector('.rest-time').textContent = fmtDuration(left);
     restBar.querySelector('.rest-progress').style.width = `${(1 - left / ((a.restTotal || 90) * 1000)) * 100}%`;
   } else {
