@@ -1,4 +1,4 @@
-import { todayKey } from './dates.js';
+import { todayKey, weekStart } from './dates.js';
 
 const KEY = 'tracker:v1';
 const subs = new Set();
@@ -18,15 +18,65 @@ function defaults() {
       routines: [], // [{ id, name, exercises: [{ id, name, sets, reps, weight, rest }] }]
       active: null, // the workout in progress
       history: [], // finished workouts, newest first
+      // Repeating schedule: slots[i] is a routine id (or null = rest day).
+      // `anchor` is the date of slot 0; each date in `skips` pushes everything after it back one day.
+      program: null, // { slots: [], anchor: 'YYYY-MM-DD', skips: [] }
     },
     projects: {
       list: [], // [{ id, name, color, notes }]
       tasks: [], // [{ id, projectId, title, date, time, done, createdAt }]
     },
+    daily: {
+      habits: [], // [{ id, name, note }]
+      done: {}, // { 'YYYY-MM-DD': [habitId, ...] }
+    },
   };
 }
 
 const ex = (name, sets, reps, weight, rest) => ({ id: uid(), name, sets, reps, weight, rest });
+
+const STARTER_ROUTINES = {
+  'Front & Back': () => [
+    ex('Incline bench press', 4, 8, 50, 120),
+    ex('Lat pulldown', 4, 10, 55, 90),
+    ex('Dumbbell bench press', 3, 10, 26, 90),
+    ex('Seated cable row', 3, 10, 55, 90),
+    ex('Cable fly', 3, 12, 15, 60),
+    ex('Straight-arm pulldown', 3, 12, 20, 60),
+  ],
+  'Arms & Shoulders': () => [
+    ex('Seated dumbbell press', 4, 8, 22, 90),
+    ex('Lateral raise', 4, 15, 8, 60),
+    ex('Rear delt fly', 3, 15, 8, 60),
+    ex('EZ-bar curl', 3, 10, 30, 60),
+    ex('Skull crusher', 3, 10, 25, 60),
+    ex('Hammer curl', 3, 12, 14, 60),
+    ex('Overhead triceps extension', 3, 12, 20, 60),
+  ],
+};
+
+/** Push → Pull → Legs → Front & Back → Arms & Shoulders → Legs → Rest, starting Monday this week. */
+function defaultProgram(routines) {
+  const find = (name) => {
+    let r = routines.find((x) => x.name.trim().toLowerCase() === name.toLowerCase());
+    if (!r) {
+      r = { id: uid(), name, exercises: STARTER_ROUTINES[name]?.() || [] };
+      routines.push(r);
+    }
+    return r.id;
+  };
+  const legs = find('Legs');
+  return {
+    slots: [find('Push'), find('Pull'), legs, find('Front & Back'), find('Arms & Shoulders'), legs, null],
+    anchor: weekStart(todayKey()),
+    skips: [],
+  };
+}
+
+const starterHabits = () => [
+  { id: uid(), name: 'Learn Italian', note: '15 minutes' },
+  { id: uid(), name: 'Play the guitar', note: '' },
+];
 
 function seed() {
   const d = defaults();
@@ -70,19 +120,25 @@ function seed() {
   d.projects.tasks.push({
     id: uid(), projectId: pid, title: 'Put the tracker on my phone', date: todayKey(), time: '', done: false, createdAt: Date.now(),
   });
-  return d;
+  delete d.daily; // let migrate() add the starter habits + program
+  return migrate(d);
 }
 
 /** Fill in any fields missing from older saves so new features never crash on old data. */
 function migrate(s) {
   const d = defaults();
-  return {
+  const out = {
     ...d,
     ...s,
+    version: 2,
     food: { ...d.food, ...s.food, goals: { ...d.food.goals, ...s.food?.goals } },
     gym: { ...d.gym, ...s.gym },
     projects: { ...d.projects, ...s.projects },
+    daily: s.daily ? { ...d.daily, ...s.daily } : { habits: starterHabits(), done: {} },
   };
+  out.gym.routines = [...out.gym.routines];
+  if (!out.gym.program) out.gym.program = defaultProgram(out.gym.routines);
+  return out;
 }
 
 function load() {

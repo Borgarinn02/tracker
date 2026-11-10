@@ -22,6 +22,16 @@ export function weekStart(key = todayKey()) {
   return dayKey(d);
 }
 
+export const daysBetween = (a, b) => Math.round((parseKey(b) - parseKey(a)) / 864e5);
+
+export function greeting(d = new Date()) {
+  const hr = d.getHours();
+  if (hr >= 5 && hr < 12) return 'Good morning';
+  if (hr >= 12 && hr < 18) return 'Good afternoon';
+  if (hr >= 18 && hr < 22) return 'Good evening';
+  return 'Good night';
+}
+
 export function fmtDay(key, opts) {
   const t = todayKey();
   if (key === t) return 'Today';

@@ -16,6 +16,7 @@
   "shortcuts": [
     { "name": "Start workout", "short_name": "Gym", "url": "./#gym", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
     { "name": "Log food", "short_name": "Food", "url": "./#food", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Daily checklist", "short_name": "Daily", "url": "./#daily", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
     { "name": "Projects & calendar", "short_name": "Projects", "url": "./#projects", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
   ]
 }

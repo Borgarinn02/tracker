@@ -1,6 +1,7 @@
 import { h, sheet, field, numInput, toast, icon, fmtNum } from '../ui.js';
 import { get, update, uid } from '../store.js';
-import { fmtDuration, fmtDay, dayKey, weekStart } from '../dates.js';
+import { fmtDuration, fmtDay, dayKey, weekStart, todayKey, addDays, parseKey } from '../dates.js';
+import { slotFor, workoutOn, toggleSkip } from '../schedule.js';
 
 const targetTpl = (e) => `${e.sets} × ${e.reps || '?'}${+e.weight ? ` @ ${fmtNum(e.weight)} kg` : ''}`;
 const targetLive = (e) => `${e.sets.length} × ${e.reps || '?'}${+e.weight ? ` @ ${fmtNum(e.weight)} kg` : ''}`;
@@ -19,7 +20,7 @@ function lastTime(s, name) {
 
 /* ---------- starting / finishing ---------- */
 
-function start(routine) {
+export function start(routine) {
   update((s) => {
     s.gym.active = {
       id: uid(),
@@ -286,38 +287,178 @@ function historySheet(w) {
   });
 }
 
+/* ---------- program (weekly schedule) ---------- */
+
+const weekday = (d, style = 'long') => parseKey(d).toLocaleDateString(undefined, { weekday: style });
+const slotName = (slot) => (!slot ? '—' : slot.rest ? 'Rest day' : slot.routine.name);
+
+function confirmSkip(date, slot) {
+  const when = date === todayKey() ? 'today' : fmtDay(date);
+  if (confirm(`Skip ${slot.routine.name} ${when}? It moves to the next day and the rest of the plan shifts by one day.`)) toggleSkip(date);
+}
+
+function todayCard(s) {
+  const today = todayKey();
+  const slot = slotFor(s, today);
+  if (!slot)
+    return h('section', { class: 'card empty' }, h('p', {}, 'No program set up yet.'), h('button', { class: 'btn primary', onclick: programSheet }, 'Set up program'));
+
+  const done = workoutOn(s, today);
+  const tomorrow = slotFor(s, addDays(today, 1));
+  let body;
+
+  if (slot.skipped) {
+    body = [
+      h('h2', { class: 'today-name' }, 'Skipped'),
+      h('p', { class: 'muted' }, slot.rest ? 'Rest day moved to tomorrow.' : `${slot.routine.name} moved to tomorrow.`),
+      h('div', { class: 'today-btns' }, h('button', { class: 'btn', onclick: () => toggleSkip(today) }, 'Undo skip')),
+    ];
+  } else if (slot.rest) {
+    body = [
+      h('h2', { class: 'today-name' }, 'Rest day'),
+      h('p', { class: 'muted' }, `Recover. Tomorrow: ${slotName(tomorrow)}.`),
+      done && h('div', { class: 'done-badge' }, icon('check', 16), `Trained anyway: ${done.name}`),
+    ];
+  } else {
+    const r = slot.routine;
+    body = [
+      h('h2', { class: 'today-name' }, r.name),
+      done && h('div', { class: 'done-badge' }, icon('check', 16), 'Done today'),
+      h('ul', { class: 'ex-preview' }, r.exercises.map((e) => h('li', {}, h('span', {}, e.name), h('span', { class: 'muted' }, targetTpl(e))))),
+      !r.exercises.length && h('p', { class: 'muted small' }, 'No exercises yet. Tap the pencil to add them.'),
+      h(
+        'div',
+        { class: 'today-btns' },
+        h('button', { class: 'btn primary', onclick: () => start(r) }, icon('play', 18), done ? 'Train again' : `Start ${r.name}`),
+        !done && h('button', { class: 'btn', onclick: () => confirmSkip(today, slot) }, 'Skip day')
+      ),
+    ];
+  }
+
+  return h(
+    'section',
+    { class: 'card today-card' },
+    h(
+      'div',
+      { class: 'card-head' },
+      h('div', { class: 'eyebrow' }, `Today · ${weekday(today)}`),
+      slot.routine && !slot.skipped && h('button', { class: 'icon-btn', 'aria-label': `Edit ${slot.routine.name}`, onclick: () => routineSheet(slot.routine) }, icon('edit', 18))
+    ),
+    body
+  );
+}
+
+function weekCard(s) {
+  const today = todayKey();
+  const days = Array.from({ length: 7 }, (_, i) => addDays(today, i + 1));
+  return h(
+    'section',
+    { class: 'card list-card' },
+    days.map((d) => {
+      const slot = slotFor(s, d);
+      return h(
+        'div',
+        { class: 'sched-row' + (slot.skipped ? ' skipped' : '') + (slot.rest && !slot.skipped ? ' rest' : '') },
+        h('div', { class: 'sched-day' }, h('strong', {}, weekday(d, 'short')), h('span', {}, parseKey(d).getDate())),
+        h('div', { class: 'sched-name' }, slot.skipped ? 'Skipped' : slotName(slot)),
+        slot.skipped
+          ? h('button', { class: 'btn small ghost', onclick: () => toggleSkip(d) }, 'Undo')
+          : !slot.rest && h('button', { class: 'btn small ghost', onclick: () => confirmSkip(d, slot) }, 'Skip')
+      );
+    })
+  );
+}
+
+function programSheet() {
+  const s = get();
+  const p = s.gym.program || { slots: [], anchor: todayKey(), skips: [] };
+  const today = todayKey();
+  const cur = slotFor(s, today);
+
+  const todaySel = h('select', { name: 'todayIdx' });
+  const list = h('div', { class: 'slot-list' });
+
+  const slotRow = (id) => {
+    const row = h(
+      'div',
+      { class: 'slot-row' },
+      h('span', { class: 'slot-n' }),
+      h('select', { class: 'slot-sel', value: id || '', onchange: refresh }, h('option', { value: '' }, 'Rest day'), s.gym.routines.map((r) => h('option', { value: r.id }, r.name))),
+      h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Remove day', onclick: () => (row.remove(), refresh()) }, icon('close', 18))
+    );
+    return row;
+  };
+
+  function refresh() {
+    const rows = [...list.querySelectorAll('.slot-row')];
+    const keep = todaySel.value;
+    rows.forEach((r, i) => (r.querySelector('.slot-n').textContent = `Day ${i + 1}`));
+    todaySel.replaceChildren(
+      ...rows.map((r, i) => h('option', { value: String(i) }, `Day ${i + 1}: ${r.querySelector('.slot-sel').selectedOptions[0]?.textContent || ''}`))
+    );
+    if (keep && +keep < rows.length) todaySel.value = keep;
+  }
+
+  list.append(...p.slots.map(slotRow));
+  refresh();
+  if (cur) todaySel.value = String(cur.idx);
+
+  sheet({
+    title: 'Program',
+    body: h(
+      'div',
+      { class: 'form' },
+      h('p', { class: 'muted small' }, 'Your cycle repeats in this order. Use “Rest day” for days off.'),
+      list,
+      h('button', { type: 'button', class: 'btn block', onclick: () => (list.append(slotRow(null)), refresh()) }, icon('plus', 18), 'Add day'),
+      field(`Today (${weekday(today)}) is`, todaySel)
+    ),
+    onSubmit(fd, form) {
+      const slots = [...form.querySelectorAll('.slot-sel')].map((x) => x.value || null);
+      if (!slots.length) return false;
+      const idx = Math.min(+fd.get('todayIdx') || 0, slots.length - 1);
+      update((st) => {
+        st.gym.program = { slots, anchor: addDays(today, -idx), skips: (st.gym.program?.skips || []).filter((d) => d > today) };
+      });
+    },
+  });
+}
+
+/* ---------- idle page ---------- */
+
 function renderIdle(root, s) {
   const ws = weekStart();
   const thisWeek = s.gym.history.filter((w) => dayKey(new Date(w.startedAt)) >= ws);
   const lastByRoutine = (id) => s.gym.history.find((w) => w.routineId === id);
 
   root.append(
+    todayCard(s),
+    h('div', { class: 'section-row' }, h('h3', { class: 'section-title' }, 'Coming up'), h('button', { class: 'btn small ghost', onclick: programSheet }, icon('edit', 16), 'Program')),
+    s.gym.program && weekCard(s),
     h(
       'section',
       { class: 'stats' },
       h('div', { class: 'stat' }, h('strong', {}, thisWeek.length), h('span', {}, 'workouts this week')),
       h('div', { class: 'stat' }, h('strong', {}, fmtNum(Math.round(thisWeek.reduce((v, w) => v + volume(w), 0)))), h('span', {}, 'kg lifted this week'))
     ),
-    h('h3', { class: 'section-title' }, 'Start a workout'),
-    s.gym.routines.map((r) => {
-      const last = lastByRoutine(r.id);
-      return h(
-        'section',
-        { class: 'card routine' },
-        h(
+    h('h3', { class: 'section-title' }, 'Routines'),
+    h(
+      'section',
+      { class: 'card list-card' },
+      s.gym.routines.map((r) => {
+        const last = lastByRoutine(r.id);
+        return h(
           'div',
-          { class: 'card-head' },
-          h('div', {}, h('h3', {}, r.name), h('span', { class: 'muted small' }, last ? `Last done ${fmtDay(dayKey(new Date(last.startedAt)))}` : 'Not done yet')),
-          h('button', { class: 'icon-btn', 'aria-label': `Edit ${r.name}`, onclick: () => routineSheet(r) }, icon('edit', 18))
-        ),
-        h(
-          'ul',
-          { class: 'ex-preview' },
-          r.exercises.map((e) => h('li', {}, h('span', {}, e.name), h('span', { class: 'muted' }, targetTpl(e))))
-        ),
-        h('button', { class: 'btn primary block', onclick: () => start(r) }, icon('play', 18), `Start ${r.name}`)
-      );
-    }),
+          { class: 'routine-row' },
+          h(
+            'button',
+            { class: 'row', onclick: () => routineSheet(r) },
+            h('div', { class: 'row-main' }, h('span', { class: 'row-title' }, r.name), h('span', { class: 'row-sub' }, `${r.exercises.length} exercises · ${last ? `last ${fmtDay(dayKey(new Date(last.startedAt)))}` : 'not done yet'}`))
+          ),
+          h('button', { class: 'icon-btn', 'aria-label': `Start ${r.name}`, onclick: () => start(r) }, icon('play', 18))
+        );
+      })
+    ),
     h(
       'div',
       { class: 'row-btns' },
@@ -346,7 +487,12 @@ function renderIdle(root, s) {
 
 export const gymPage = {
   title: 'Gym',
-  subtitle: () => (get().gym.active ? 'Workout in progress' : 'Pick a routine and go'),
+  subtitle: () => {
+    const s = get();
+    if (s.gym.active) return 'Workout in progress';
+    const slot = slotFor(s, todayKey());
+    return slot ? (slot.skipped ? 'Skipped today' : `Today: ${slotName(slot)}`) : 'Set up your program';
+  },
   render(root) {
     const s = get();
     if (s.gym.active) renderActive(root, s);

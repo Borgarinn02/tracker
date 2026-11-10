@@ -5,24 +5,26 @@ import { fmtDuration, todayKey } from './dates.js';
 import { foodPage } from './pages/food.js';
 import { gymPage } from './pages/gym.js';
 import { projectsPage } from './pages/projects.js';
+import { dailyPage } from './pages/daily.js';
+import { homePage } from './pages/home.js';
 
-const PAGES = { food: foodPage, gym: gymPage, projects: projectsPage };
-const ORDER = ['food', 'gym', 'projects'];
+const PAGES = { food: foodPage, daily: dailyPage, home: homePage, gym: gymPage, projects: projectsPage };
+const ORDER = ['food', 'daily', 'home', 'gym', 'projects'];
+const val = (v) => (typeof v === 'function' ? v() : v);
 
 const $ = (id) => document.getElementById(id);
 const view = $('view');
 
 function currentPage() {
   const k = location.hash.slice(1);
-  if (PAGES[k]) return k;
-  return get().gym.active ? 'gym' : 'food'; // mid-workout? open straight to it
+  return PAGES[k] ? k : 'home';
 }
 
 /* ---------- nav ---------- */
 
 $('nav').append(
   ...ORDER.map((k) =>
-    h('a', { href: `#${k}`, class: 'nav-item', 'data-page': k }, icon(k, 24), h('span', {}, PAGES[k].title))
+    h('a', { href: `#${k}`, class: 'nav-item', 'data-page': k }, icon(k, 24), h('span', {}, PAGES[k].navLabel || PAGES[k].title))
   )
 );
 
@@ -34,8 +36,8 @@ function render() {
   const page = PAGES[key];
   const y = key === lastPage ? window.scrollY : 0;
 
-  $('title').textContent = page.title;
-  $('subtitle').textContent = page.subtitle?.() || '';
+  $('title').textContent = val(page.title);
+  $('subtitle').textContent = val(page.subtitle) || '';
   $('actions').replaceChildren(
     ...(page.actions?.() || []),
     h('button', { class: 'icon-btn', 'aria-label': 'Settings', onclick: settingsSheet }, icon('settings'))
@@ -104,6 +106,7 @@ function adjustRest(sec) {
 function tick() {
   const now = Date.now();
   for (const el of document.querySelectorAll('[data-elapsed]')) el.textContent = fmtDuration(now - +el.dataset.elapsed);
+  if (lastPage) $('title').textContent = val(PAGES[lastPage].title); // keeps the greeting current if the app stays open
 
   const a = get().gym.active;
   if (a?.restEndsAt) {
