@@ -1,0 +1,21 @@
+{
+  "name": "Tracker",
+  "short_name": "Tracker",
+  "description": "Gym, food and projects in one place.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0e0f12",
+  "theme_color": "#0e0f12",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ],
+  "shortcuts": [
+    { "name": "Start workout", "short_name": "Gym", "url": "./#gym", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Log food", "short_name": "Food", "url": "./#food", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Projects & calendar", "short_name": "Projects", "url": "./#projects", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}
