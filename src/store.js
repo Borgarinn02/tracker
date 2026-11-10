@@ -152,15 +152,20 @@ function load() {
 }
 
 let state = load();
+const saveHooks = new Set();
 save();
 
-function save() {
+/** `local: true` means the change was made on this device (so it needs uploading). */
+function save(info = { local: false }) {
   try {
     localStorage.setItem(KEY, JSON.stringify(state));
   } catch (e) {
     console.error('Could not save', e);
   }
+  saveHooks.forEach((f) => f(info));
 }
+
+export const onSave = (fn) => saveHooks.add(fn);
 
 export const get = () => state;
 
@@ -170,13 +175,14 @@ export const get = () => state;
  */
 export function update(fn, { silent = false } = {}) {
   fn(state);
-  save();
+  save({ local: true });
   if (!silent) subs.forEach((f) => f());
 }
 
-export function replace(next) {
+/** Swap in a whole new state (import, reset, or data arriving from the cloud). */
+export function replace(next, { fromSync = false } = {}) {
   state = migrate(next);
-  save();
+  save({ local: !fromSync });
   subs.forEach((f) => f());
 }
 

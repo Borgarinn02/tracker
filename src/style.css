@@ -600,3 +600,18 @@ body.resting #toast { bottom: calc(var(--nav-h) + var(--safe-b) + 92px); }
 .slot-list { display: grid; gap: 8px; }
 .slot-row { display: grid; grid-template-columns: 52px 1fr 40px; gap: 6px; align-items: center; }
 .slot-n { font-size: 13px; font-weight: 700; color: var(--muted); }
+
+/* ---------- cloud sync ---------- */
+.sync-box { display: grid; gap: 10px; }
+.sync-status { display: flex; align-items: center; gap: 12px; padding: 10px 12px; background: var(--surface-2); border-radius: 12px; }
+.sync-text { display: grid; min-width: 0; }
+.sync-text strong { overflow: hidden; text-overflow: ellipsis; }
+.sync-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; background: #34d399; }
+.sync-dot.syncing, .sync-dot.offline { background: var(--carbs); }
+.sync-dot.error { background: var(--danger); }
+.sync-ind { position: relative; }
+.sync-ind[data-sync='idle']::after, .sync-ind[data-sync='syncing']::after, .sync-ind[data-sync='offline']::after, .sync-ind[data-sync='error']::after {
+  content: ''; position: absolute; top: 8px; right: 7px; width: 7px; height: 7px; border-radius: 50%; background: #34d399; box-shadow: 0 0 0 2px var(--bg);
+}
+.sync-ind[data-sync='syncing']::after, .sync-ind[data-sync='offline']::after { background: var(--carbs); }
+.sync-ind[data-sync='error']::after { background: var(--danger); }
